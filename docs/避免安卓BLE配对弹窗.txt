@@ -1,0 +1,3071 @@
+From: https://chatgpt.com/c/6a605a0f-2270-83ec-911f-291d18959c0d
+
+
+
+you asked
+
+message time: 2026-07-22 13:53:27
+
+有一个pico眼镜，里面播放VR内容（APP）。另外有一个单片机包含蓝夜服务的服务的模块。
+
+pico app的程序中写入了单片机蓝牙的mac地址。在app运行过程中直接执行打开和连接单片机蓝牙的时候，APP里会弹出安卓原生的连接请求弹窗。如何避免？
+
+
+chatgpt response
+
+先给结论：
+
+如果这个弹窗是 Android 系统的 BLE 配对（Pairing/Bonding）请求弹窗，那么普通 App（包括 Pico App）无法屏蔽或绕过。 这是 Android Framework 的安全机制，应用没有 API 可以禁止显示。(Android Developers)
+
+不过，需要先区分你看到的到底是哪一种弹窗。
+
+
+情况一：BLE GATT 连接（推荐方式）
+
+如果 MCU 是 BLE Peripheral，App 使用
+
+device.connectGatt(...)
+
+正常建立 GATT 连接：
+
+Scan
+    ↓
+connectGatt()
+    ↓
+discoverServices()
+    ↓
+read/write characteristic
+
+正常情况下不会弹出任何配对框。
+
+Android 官方 BLE 示例也是如此。(Android Developers)
+
+
+情况二：访问了需要加密的 Characteristic（最常见）
+
+如果 MCU 的 Attribute 设置了：
+
+Read Encryption Required
+Write Encryption Required
+Authenticated Read
+Authenticated Write
+
+那么：
+
+connectGatt()
+        ↓
+readCharacteristic()
+        ↓
+Android发现需要Bond
+        ↓
+系统弹出Pairing Request
+
+这个弹窗就是系统触发的。
+
+例如 Nordic、TI、Dialog、Silabs 的 SDK 都是这样工作的。
+
+解决办法只有两个：
+
+方法1：不要要求 Bond（推荐）
+
+把需要通信的 Characteristic 权限改成：
+
+Readable
+Writable
+Notify
+
+不要使用：
+
+*_ENCRYPTED
+*_AUTHENTICATED
+
+这样：
+
+connectGatt()
+↓
+read/write
+↓
+不会配对
+
+
+方法2：如果必须加密
+
+那就必须 Bond。
+
+Android 会弹窗。
+
+无法取消。
+
+
+情况三：MCU 主动发起 Security Request
+
+很多 BLE SDK 默认：
+
+连接建立
+      ↓
+Peripheral发送
+Security Request
+      ↓
+Android立即弹Pairing
+
+例如：
+
+Nordic：
+
+sd_ble_gap_authenticate()
+
+或者
+
+pm_conn_secure()
+
+TI：
+
+GAPBondMgr_Pair()
+
+Silabs：
+
+sl_bt_sm_increase_security()
+
+如果 MCU 一连接就调用这些接口：
+
+APP
+ ↓
+connectGatt
+ ↓
+Peripheral:
+IncreaseSecurity()
+ ↓
+Android Pairing Dialog
+
+因此可以检查：
+
+是不是 MCU 固件主动请求 Security。
+
+
+情况四：你调用的是 createBond()
+
+如果代码里有：
+
+device.createBond();
+
+Android 官方说明：
+
+系统会负责完成配对流程，并处理所有用户交互。(Android Developers)
+
+
+
+也就是说：
+
+createBond()
+      ↓
+系统Pair Dialog
+
+这个也是不能隐藏的。
+
+
+Pico 与普通 Android 没区别
+
+Pico OS 本质上也是 Android。
+
+因此：
+
+Bluetooth Framework
+Bluetooth Stack
+Pairing Dialog
+
+都是系统组件。
+
+普通 App 没权限：
+
+隐藏 Pair Dialog
+自动点击 Pair
+自动 Bond
+
+除非：
+
+修改 Pico ROM
+修改 Bluetooth Framework
+System App（系统签名）
+Root
+
+否则做不到。
+
+
+如果你的目标只是连接 MCU
+
+建议采用下面这种 BLE 设计：
+
+Pico APP
+      │
+Scan
+      │
+connectGatt
+      │
+Discover Service
+      │
+Read/Write Characteristic
+
+Characteristic 权限全部使用：
+
+READ
+WRITE
+WRITE_NO_RESPONSE
+NOTIFY
+
+不要：
+
+READ_ENCRYPTED
+WRITE_ENCRYPTED
+AUTHENTICATED
+
+整个流程不会出现任何配对弹窗。
+
+
+我怀疑你的项目属于哪一种
+
+根据你的描述：
+
+App 已经知道 MCU 的 MAC 地址，启动后直接连接，就弹出 Android 原生连接请求。
+
+
+
+80% 以上概率不是因为知道 MAC 地址，而是因为 MCU 固件开启了 BLE Security（Bond/Pairing）。
+
+如果 MCU 没开启安全要求，仅执行 connectGatt() 连接 BLE GATT，Android 一般不会弹出配对请求；只有在需要建立 Bond（例如访问加密特征或外设主动请求提升安全级别）时，系统才会显示该弹窗。(Android Developers)
+
+
+如果你能补充以下信息，我基本可以确定原因：
+
+MCU 使用的 BLE 芯片（Nordic nRF52、ESP32、TI CC2640、Telink、RTL8762、BK、沁恒等）。
+Pico App 使用的是：BluetoothGatt.connectGatt()（BLE）
+还是 BluetoothSocket.createRfcommSocketToServiceRecord()（经典蓝牙 SPP）。
+
+
+Android 弹窗的具体文字："蓝牙配对请求 (Bluetooth Pairing Request)"
+"配对和连接"
+"允许访问联系人/消息"
+或其他内容。
+
+
+you asked
+
+message time: 2026-07-22 14:10:33
+
+MCU是ESP32
+
+🔵 蓝牙连接流程
+
+权限申请 (BluetoothInit.cs)
+
+申请 6 项 Android 权限：BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_ADVERTISE, BLUETOOTH_CONNECT, 以及 CoarseLocation/FineLocation
+权限只申请一次（PlayerPrefs 记录）
+
+初始化 (BluetoothManager.InitBluetooth())
+// 通过 AndroidJavaClass 加载 Java 蓝牙插件
+unity3dbluetoothplugin = new AndroidJavaClass("com.example.unity3dbluetoothplugin.BluetoothConnector");
+BluetoothConnector = unity3dbluetoothplugin.CallStatic("getInstance");
+// 2秒后自动开始连接
+Invoke("StartConnection", 2);
+
+
+建立连接 (BluetoothManager.StartConnection())
+// 从配置中获取对应马机的 MAC 地址
+string mac = AppConst.HorseMacs[XRCommonUtils.Instance.HorseIndex];
+// 调用 Java 插件连接
+BluetoothConnector.CallStatic("StartConnection", mac);
+
+HorseMacs[] 存储在 BuildSettingsAsset 中（构建配置资产）
+通过 XRCommonUtils.Instance.HorseIndex 选择对应座椅
+
+发送速度数据 (BluetoothManager.WriteSpeedData())
+// 只有连接成功后且 index 匹配时才发送
+if (isConnected && index == XRCommonUtils.Instance.HorseIndex)
+ BluetoothConnector.CallStatic("WriteData", speed.ToString());
+// speed == 0 时自动断开连接
+
+
+🏇 骑马逻辑
+
+选座椅 → 上马
+
+UIHorseSelecter.OnTriggerEnter(): 触碰 HorseUI 标签的物体 → 触发 Events.OnTouchHorseUI
+HorseMachines.OnSelectHorse(index): 屏幕淡出 → 抬高玩家 Y 轴 → 隐藏马机模型（machines[i]）→ 显示虚拟马模型（horses[i]）→ 屏幕淡入
+
+NpcPatrolController → SWSController（样条曲线运动）
+
+马匹沿预设的 pathManagers[] 样条路径自动行走
+通过 SWS.splineMove 组件驱动
+到达不同路径点 (waypoint) 时自动调整速度：
+
+┌──────────┬──────────┐
+│ WayPoint │ 目标速度 │
+├──────────┼──────────┤
+│ 3        │ 240      │
+├──────────┼──────────┤
+│ 5        │ 180      │
+├──────────┼──────────┤
+│ 10       │ 200      │
+├──────────┼──────────┤
+│ 17       │ 220      │
+├──────────┼──────────┤
+│ 32       │ 240      │
+├──────────┼──────────┤
+│ 41       │ 200      │
+├──────────┼──────────┤
+│ 43       │ 240      │
+├──────────┼──────────┤
+│ 48       │ 260      │
+├──────────┼──────────┤
+│ 51       │ 220      │
+└──────────┴──────────┘
+
+速度平滑过渡
+
+SWSController.Update() 中每 50 帧逐步调整速度（speedStep 步长或默认 ±40/±60）
+ChangePathByIndex(): 切换河道分支路径，使用 DOTween 平滑过渡位置和朝向
+
+
+🔗 事件系统桥接 (Events.cs)
+
+namespace HorseToBluetooth
+{
+    public class Events
+    {
+        Action OnTouchHorseUI;          // 触碰座椅 → 选马
+        Action<int, int> SendSpeedData;      // 向马机发送速度 (马索引, 速度值)
+        Action DisconnectHorse;              // 断开连接
+        Action StartConnect;                 // 开始连接
+        Action OnDebugLog;           // 调试日志
+        Action<Collider, string> OnSoundTriggerEnter;  // 声音区域
+        Action OnWaterTriggerEnter/Exit;     // 水面触发
+    }
+}
+
+SendSpeedData 调用链：SWSController.OnReachPoint() 的速度变化 → (某处调用 Events.SendSpeedData?.Invoke(index, speed)) → BluetoothManager.WriteSpeedData() → Android Java 插件 → 物理马机接收速度指令
+
+
+📱 Java 层 (Android 插件)
+
+Plugins/Android/unity3dbluetoothplugin-release.aar 提供：
+
+com.example.unity3dbluetoothplugin.BluetoothConnector
+StartScanDevices() / StopScanDevices() — 扫描设备
+StartConnection(mac) / StopConnection() — 连接/断开
+WriteData(string) — 发送数据
+GetPairedDevices() — 获取已配对设备
+Toast(string) — 显示 Toast
+
+Java 层通过 UnityPlayer.UnitySendMessage() 回调 Unity 方法：
+
+ScanStatus(string) — 扫描状态
+NewDeviceFound(string) — 发现新设备 (MAC+NAME)
+ConnectionStatus(string) — 连接状态 (connected/disconnected)
+ReadData(string) — 接收数据
+ReadLog(string) — 日志
+
+
+🧩 整体架构图
+
+┌──────────────────────────────────────────────────┐
+│  Unity C# 层                                      │
+│                                                    │
+│  UIHorseSelecter ──→ HorseMachines ──→ HorsesMgr  │
+│  (触碰选座椅)        (显示/隐藏马)     (上马/骑行)  │
+│                                                    │
+│  SWSController (样条曲线运动)                       │
+│    │ OnReachPoint() → 速度变化                     │
+│    │                                               │
+│    └──→ Events.SendSpeedData ──→ BluetoothManager  │
+│                                     │              │
+│                                     │ AndroidJava  │
+│                                     ▼              │
+│  ┌──────────────────────────────────────┐          │
+│  │ unity3dbluetoothplugin.aar (Java)   │          │
+│  │  - BluetoothConnector               │          │
+│  │  - 连接/断开/扫描/写数据             │          │
+│  └──────────────────────────────────────┘          │
+│                    │                                │
+└────────────────────┼────────────────────────────────┘
+                     │ Bluetooth SPP (串口)
+                     ▼
+              ┌──────────────┐
+              │  物理马机座椅  │
+              │  (接收速度指令) │
+              └──────────────┘
+
+总结：这是一个典型的 Unity + Android 蓝牙插件架构。玩家在 VR 中选择一匹马的座椅（通过 UIHorseSelecter 触发），系统通过 BluetoothManager 连接对应 MAC 地址的蓝牙马机。马按照 SWSController 预设的样条曲线自动行走，在不同路径点自动变速，速度值通过 Events.SendSpeedData 事件 → BluetoothManager.WriteSpeedData() → Android 蓝牙串口发送给物理马机，实现 VR 视觉画面与物理座椅动作的同步。
+
+
+chatgpt response
+
+你给出的信息已经基本可以定位问题了。
+
+关键结论：你这不是 BLE（GATT），而是经典蓝牙 SPP（Bluetooth Serial Port Profile）。
+
+你提供的几个接口：
+
+StartConnection(mac)
+WriteData(string)
+GetPairedDevices()
+
+再结合：
+
+Bluetooth SPP (串口)
+
+说明你的 Java 插件大概率内部使用的是：
+
+BluetoothDevice device = adapter.getRemoteDevice(mac);
+BluetoothSocket socket =
+    device.createRfcommSocketToServiceRecord(UUID);
+socket.connect();
+
+或者
+
+createInsecureRfcommSocketToServiceRecord(...)
+
+而不是
+
+BluetoothGatt.connectGatt(...)
+
+
+为什么会弹系统连接请求？
+
+经典蓝牙 SPP 的连接流程是：
+
+APP
+    │
+BluetoothSocket.connect()
+    │
+Android检查Bond状态
+    │
+未配对
+    │
+系统发起Pairing
+    │
+弹窗
+
+Android 对 RFCOMM/SPP 的设计就是：
+
+未 Bond 的设备，首次连接通常必须完成配对。
+
+
+
+因此：
+
+这个弹窗不是 Unity，也不是 Pico。
+
+而是：
+
+Bluetooth Framework
+        ↓
+Bluetooth Service
+        ↓
+SystemUI
+        ↓
+Pairing Dialog
+
+App 无法拦截。
+
+
+你代码里还有一个明显信号
+
+你的 Java 插件提供了：
+
+GetPairedDevices()
+
+很多 SPP 插件都是：
+
+Set<BluetoothDevice> devices =
+adapter.getBondedDevices();
+
+说明它本身就是按照：
+
+配对
+↓
+
+BondedDevices
+
+↓
+
+连接
+
+设计的。
+
+
+ESP32 默认也是要求 Bond 吗？
+
+不一定。
+
+ESP32 可以：
+
+Classic Bluetooth
+
+也可以：
+
+BLE
+
+但是：
+
+SPP（Serial Bluetooth）
+
+一般都是：
+
+BluetoothSerial
+
+例如 Arduino：
+
+BluetoothSerial SerialBT;
+
+SerialBT.begin("Horse");
+
+Android 第一次连接：
+
+Pairing
+
+这是经典蓝牙协议本身的行为。
+
+
+是否可以去掉？
+
+需要分情况。
+
+
+方法一：提前完成配对（推荐）
+
+例如：
+
+第一次部署：
+
+Settings
+
+↓
+
+Bluetooth
+
+↓
+
+Horse-01
+
+↓
+
+Pair
+
+以后：
+
+BluetoothSocket.connect()
+
+不会再弹。
+
+这是工业设备最常见方案。
+
+
+方法二：APP 启动时自动 createBond()
+
+不能。
+
+因为：
+
+device.createBond();
+
+一样会弹：
+
+Bluetooth Pair Request
+
+只是提前弹。
+
+
+方法三：修改 ESP32
+
+如果仍然使用：
+
+Classic Bluetooth SPP
+
+基本没有意义。
+
+Android 的 Bond 流程还是在。
+
+
+方法四：改 BLE
+
+如果你的需求只是：
+
+发送速度：
+
+220
+180
+260
+
+实际上：
+
+BLE UART
+
+完全可以。
+
+例如：
+
+connectGatt()
+
+↓
+
+writeCharacteristic()
+
+↓
+
+Notify
+
+整个过程：
+
+APP
+    │
+connectGatt
+    │
+DiscoverService
+    │
+Write
+
+只要 Characteristic 不要求 Encryption：
+
+完全不会出现 Pair Dialog。
+
+这是目前大量 VR 外设采用的方式。
+
+
+我比较关心 Java 插件
+
+真正决定弹窗的是：
+
+unity3dbluetoothplugin-release.aar
+
+因为 Unity C# 根本没有操作蓝牙。
+
+真正代码在：
+
+BluetoothConnector.java
+
+或者
+
+BluetoothConnector.kt
+
+里面。
+
+我想确认它到底是：
+
+BluetoothSocket
+
+还是
+
+BluetoothGatt
+
+只需要看几个函数：
+
+StartConnection()
+
+WriteData()
+
+GetPairedDevices()
+
+尤其是：
+
+StartConnection()
+
+里面如果出现：
+
+createRfcommSocketToServiceRecord()
+
+那么可以 100% 确认：
+
+这是经典蓝牙 SPP。Android 的首次配对弹窗无法由普通 App 去掉，只能预配对或改用 BLE GATT。
+
+
+
+如果你能提供 **unity3dbluetoothplugin-release.aar**（或反编译后的 BluetoothConnector.java），我可以直接指出是哪一行代码触发了系统配对流程，以及是否存在可调整的实现方式。
+
+
+you asked
+
+message time: 2026-07-22 14:26:24
+
+📦 生成的文件
+
+┌────────────────────────────────────┬────────┬──────────────────────┐
+│                文件                │  大小  │         说明         │
+├────────────────────────────────────┼────────┼──────────────────────┤
+│ unity3dbluetoothplugin-release.aar │ 7.5 KB │ 原始 Android 插件包  │
+├────────────────────────────────────┼────────┼──────────────────────┤
+│ BluetoothConnector.java            │ 10 KB  │ 完全重构的 Java 源码 │
+├────────────────────────────────────┼────────┼──────────────────────┤
+│ DeviceListAdapter.java             │ 1.2 KB │ 设备列表适配器       │
+└────────────────────────────────────┴────────┴──────────────────────┘
+
+
+🔍 反编译结构
+
+AAR 内包含 4 个 class，已全部重构为源码：
+
+com/example/unity3dbluetoothplugin/
+├── BluetoothConnector.java       ← 主类 (单例)
+│   ├── $1 (BroadcastReceiver)    ← 蓝牙设备发现广播
+│   └── $2 (Runnable)             ← 后台数据读取线程
+└── DeviceListAdapter.java        ← 扫描设备去重管理
+
+AndroidManifest.xml 权限声明
+
+核心通信方式
+
+协议: Bluetooth Classic RFCOMM (SPP 串口仿真)
+UUID: 00001101-0000-1000-8000-00805F9B34FB (标准 SPP)
+write: outputStream.write(speed.getBytes()) — 直接写字符串形式的速度值
+read: BufferedReader.readLine() → UnityPlayer.UnitySendMessage("BluetoothManager", "ReadData", data) — 异步线程读取
+回调 Unity: 通过 UnityPlayer.UnitySendMessage 发送到 BluetoothManager 游戏对象
+
+一个小问题
+
+WriteData(String speed) 发送的是纯字符串（如 "220"），没有换行/分隔符。如果马机的嵌入式固件期望以 \n 或 \r\n 结尾，可能需要额外确认协议。从 Java 层面看，写的是 speed.getBytes() 原始字节。
+
+package com.example.unity3dbluetoothplugin;
+
+import android.bluetooth.BluetoothDevice;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+
+蓝牙设备列表适配器
+
+
+
+用于设备扫描去重 —— 同一 MAC 地址只记录一次
+
+
+Unity 调用 getPairedDevices() 时使用
+ */
+public class DeviceListAdapter {
+
+ /** 以 MAC 地址为 key 的设备映射表，确保去重 */
+ public Map<String, BluetoothDevice> mDevicesMap;
+
+ public DeviceListAdapter() {
+ mDevicesMap = new HashMap<>();
+ }
+
+ /**
+
+添加设备 (去重)
+@param device 蓝牙设备
+@return true=新增, false=已存在
+  */
+ public boolean AddDevice(BluetoothDevice device) {
+ if (mDevicesMap.get(device.getAddress()) != null) {
+ return false;   // 已存在，不重复添加
+ }
+ mDevicesMap.put(device.getAddress(), device);
+ return true;
+ }
+
+ /** 获取设备数量 */
+ public int getCount() {
+     return mDevicesMap.size();
+ }
+
+ /** 根据 MAC 地址获取设备 */
+ public BluetoothDevice getItem(String address) {
+     return mDevicesMap.get(address);
+ }
+
+ /** 清空设备列表 */
+ public void clearAll() {
+     mDevicesMap.clear();
+ }
+
+}
+
+package com.example.unity3dbluetoothplugin;
+
+import android.app.Activity;
+import android.bluetooth.;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.content.;
+import android.os.Handler;
+import android.widget.Toast;
+
+import com.unity3d.player.UnityPlayer;
+
+import java.io.;
+import java.util.;
+
+/**
+
+Unity3D 蓝牙连接器 —— 元上都VR 骑马座椅蓝牙通信插件
+
+通过 Bluetooth SPP (RFCOMM) 与物理马机座椅通信
+
+@author YuanShangDu VR Team
+
+调用链:
+Unity C# (BluetoothManager.cs)
+→ AndroidJavaClass("com.example.unity3dbluetoothplugin.BluetoothConnector")
+
+
+→ BluetoothConnector (本类)
+
+
+→ 物理蓝牙设备 (马机座椅)
+
+ */
+public class BluetoothConnector {
+
+// ============ 单例 ============
+private static BluetoothConnector mInstance;
+
+// ============ SPP UUID (标准串口服务) ============
+private static final UUID mUUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+
+// ============ 蓝牙系统组件 ============
+private static BluetoothManager mBluetoothManager;
+private static BluetoothAdapter mBluetoothAdapter;
+private static BluetoothLeScanner mBluetoothLeScanner;
+private static DeviceListAdapter mDeviceListAdapter;
+private static boolean scanning;
+
+// ============ Handler ============
+private static final Handler handler = new Handler();
+
+// ============ 蓝牙连接 ============
+private static BluetoothSocket skt;          // RFCOMM Socket
+private static InputStream inputStream;      // 输入流 (接收数据)
+private static OutputStream outputStream;    // 输出流 (发送速度数据)
+private static BufferedReader reader;        // 缓冲读取器
+
+// ============ 数据读取线程 ============
+// 匿名内部类 $2: 持续从 inputStream 读取数据的 Runnable
+private static final Runnable ReadData = new Runnable() {
+    @Override
+    public void run() {
+        while (skt != null && skt.isConnected() && !ReadDatathread.isInterrupted()) {
+            try {
+                if (inputStream.available() > 0) {
+                    // 读取一行数据并发送回 Unity
+                    String data = reader.readLine();
+                    UnityPlayer.UnitySendMessage("BluetoothManager", "ReadData", data);
+                }
+            } catch (IOException e) {
+                UnityPlayer.UnitySendMessage("BluetoothManager", "ReadLog",
+                        "inputStream Error:" + e.toString());
+            }
+        }
+        // 连接断开
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ConnectionStatus", "disconnected");
+    }
+};
+
+private static final Thread ReadDatathread = new Thread(ReadData);
+
+// ============ 广播接收器 ============
+// 匿名内部类 $1: 蓝牙设备发现广播
+private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+
+        if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+            // 发现新设备
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+            if (mDeviceListAdapter.AddDevice(device)) {
+                String name = device.getName() != null ? device.getName() : "null";
+                String address = device.getAddress();
+                // 通知 Unity: 新设备 (MAC+名称)
+                UnityPlayer.UnitySendMessage("BluetoothManager", "NewDeviceFound",
+                        address + "+" + name);
+            }
+        } else if (BluetoothAdapter.ACTION_DISCOVERY_STARTED.equals(action)) {
+            // 扫描开始
+            UnityPlayer.UnitySendMessage("BluetoothManager", "ScanStatus", "started");
+        } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
+            // 扫描结束
+            UnityPlayer.UnitySendMessage("BluetoothManager", "ScanStatus", "stopped");
+        }
+    }
+};
+
+// ============ 单例获取 ============
+/** Unity C# 通过 AndroidJavaClass.CallStatic<AndroidJavaObject>("getInstance") 调用 */
+public static BluetoothConnector getInstance() {
+    if (mInstance == null) {
+        mInstance = new BluetoothConnector();
+    }
+    return mInstance;
+}
+
+// ============ 构造函数: 初始化蓝牙 ============
+public BluetoothConnector() {
+    // 获取当前 Unity Activity 的 ApplicationContext
+    Context appContext = UnityPlayer.currentActivity.getApplication().getApplicationContext();
+
+    // 获取 BluetoothManager 和 BluetoothAdapter
+    mBluetoothManager = (BluetoothManager) appContext.getSystemService(Context.BLUETOOTH_SERVICE);
+    mBluetoothAdapter = mBluetoothManager.getAdapter();
+
+    // 如果蓝牙未开启，尝试启用
+    if (!mBluetoothAdapter.isEnabled()) {
+        Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+        UnityPlayer.currentActivity.startActivityForResult(enableBtIntent, 1);
+    }
+    if (!mBluetoothAdapter.isEnabled()) {
+        mBluetoothAdapter.enable();
+    }
+
+    // 获取 BLE 扫描器 (未使用，保留)
+    mBluetoothLeScanner = mBluetoothAdapter.getBluetoothLeScanner();
+
+    // 初始化设备列表
+    mDeviceListAdapter = new DeviceListAdapter();
+
+    // 注册蓝牙广播接收器
+    IntentFilter filter = new IntentFilter();
+    filter.addAction(BluetoothDevice.ACTION_FOUND);
+    filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
+    filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+    appContext.registerReceiver(mReceiver, filter);
+}
+
+// ============ 设备扫描 ============
+/** Unity 调用: 开始扫描附近蓝牙设备 */
+private static void StartScanDevices() {
+    if (mBluetoothAdapter.isDiscovering()) {
+        mBluetoothAdapter.cancelDiscovery();
+    }
+    mDeviceListAdapter.clearAll();
+    mBluetoothAdapter.startDiscovery();
+}
+
+/** Unity 调用: 停止扫描 */
+private static void StopScanDevices() {
+    if (mBluetoothAdapter.isDiscovering()) {
+        mBluetoothAdapter.cancelDiscovery();
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ScanStatus", "stopped");
+    }
+}
+
+// ============ 获取已配对设备 ============
+/** Unity 调用: 返回已配对的蓝牙设备列表，格式: ["MAC+Name", ...] */
+public static String[] GetPairedDevices() {
+    try {
+        ArrayList<String> deviceList = new ArrayList<>();
+        Set<BluetoothDevice> pairedDevices = mBluetoothAdapter.getBondedDevices();
+
+        for (BluetoothDevice device : pairedDevices) {
+            deviceList.add(device.getAddress() + "+" + device.getName());
+        }
+
+        return deviceList.toArray(new String[0]);
+    } catch (Exception e) {
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ReadLog", e.toString());
+        return null;
+    }
+}
+
+// ============ 连接管理 ============
+/**
+ * Unity 调用: 连接到指定 MAC 地址的蓝牙设备 (马机座椅)
+ * @param mac 蓝牙 MAC 地址，如 "28:05:A5:29:06:B6"
+ */
+public static void StartConnection(String mac) {
+    UnityPlayer.UnitySendMessage("BluetoothManager", "ConnectionStatus", "connecting");
+
+    // 校验 MAC 地址格式
+    if (!BluetoothAdapter.checkBluetoothAddress(mac)) {
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ConnectionStatus", "Device not found");
+        return;
+    }
+
+    try {
+        // 获取远程设备
+        BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mac);
+
+        // 通过 RFCOMM (SPP) 创建 Socket 连接
+        skt = device.createRfcommSocketToServiceRecord(mUUID);
+
+        // 停止扫描 (避免干扰连接)
+        mBluetoothAdapter.cancelDiscovery();
+
+        // 建立连接
+        skt.connect();
+
+        // 获取输入/输出流
+        inputStream = skt.getInputStream();
+        outputStream = skt.getOutputStream();
+
+        // 创建缓冲读取器用于异步读取数据
+        reader = new BufferedReader(new InputStreamReader(inputStream));
+
+        // 启动数据读取线程
+        ReadDatathread.start();
+
+        // 通知 Unity 连接成功
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ConnectionStatus", "connected");
+
+    } catch (Exception e) {
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ReadLog",
+                "StartConnection Error:" + e.toString());
+    }
+}
+
+/** Unity 调用: 断开蓝牙连接 */
+public static void StopConnection() {
+    try {
+        ReadDatathread.interrupt();
+        if (inputStream != null) inputStream.close();
+        if (outputStream != null) outputStream.close();
+        if (skt != null) skt.close();
+    } catch (IOException e) {
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ReadLog",
+                "StopConnection Error:" + e.toString());
+    }
+}
+
+// ============ 数据通信 ============
+/**
+ * Unity 调用: 向已连接的蓝牙设备写入速度数据
+ * @param speed 速度值字符串 (如 "220", "240", "0"=停止)
+ */
+public static void WriteData(String speed) {
+    try {
+        if (skt != null && skt.isConnected()) {
+            outputStream.write(speed.getBytes());
+        }
+    } catch (IOException e) {
+        UnityPlayer.UnitySendMessage("BluetoothManager", "ReadLog",
+                "WriteData Error:" + e.toString());
+    }
+}
+
+// ============ 工具方法 ============
+/** Unity 调用: 显示 Android Toast 消息 */
+public static void Toast(String data) {
+    Toast.makeText(
+        UnityPlayer.currentActivity.getApplicationContext(),
+        data,
+        Toast.LENGTH_SHORT
+    ).show();
+}
+
+}
+
+
+chatgpt response
+
+现在可以明确了，原因已经确定，而且不是 Unity、Pico 或权限申请的问题。
+
+结论
+
+你的插件使用的是经典蓝牙 Bluetooth Classic RFCOMM（SPP）：
+
+BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(mac);
+
+skt = device.createRfcommSocketToServiceRecord(
+    UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+);
+
+skt.connect();
+
+UUID：
+
+00001101-0000-1000-8000-00805F9B34FB
+
+这是 Bluetooth SIG 定义的标准 SPP UUID。
+
+因此 Android 会按照经典蓝牙的规则处理连接。
+
+
+为什么弹窗？
+
+问题就在这里：
+
+skt.connect();
+
+执行以后，Android Framework 会做：
+
+socket.connect()
+
+↓
+
+BluetoothDevice
+
+↓
+
+BondState ?
+
+↓
+
+BOND_NONE
+
+↓
+
+发起 Pairing
+
+↓
+
+SystemUI
+
+↓
+
+"蓝牙配对请求"
+
+整个流程发生在 Framework 里面。
+
+你的 Java 插件没有任何地方调用：
+
+createBond()
+
+但是：
+
+RFCOMM Socket.connect() 会隐式触发 Bond。
+
+
+
+这是 Android Bluetooth Stack 的行为。
+
+
+你的代码没有问题
+
+我检查了整个 BluetoothConnector。
+
+真正连接只有：
+
+device.createRfcommSocketToServiceRecord(...)
+
+随后：
+
+skt.connect();
+
+没有：
+
+device.createBond();
+
+没有：
+
+setPin()
+
+没有：
+
+setPairingConfirmation()
+
+没有：
+
+ACTION_PAIRING_REQUEST
+
+因此：
+
+弹窗不是插件写出来的。
+
+
+能不能避免？
+
+答案分三种。
+
+
+方案一：提前配对（唯一不改协议的方法）
+
+例如：
+
+第一次：
+
+Android 设置
+
+↓
+
+Horse-01
+
+↓
+
+Pair
+
+以后：
+
+socket.connect();
+
+不会再弹。
+
+工业控制设备基本都这样做。
+
+
+方案二：改成 Insecure RFCOMM
+
+Android 提供另一个 API：
+
+device.createInsecureRfcommSocketToServiceRecord(uuid)
+
+替换：
+
+createRfcommSocketToServiceRecord()
+
+变成：
+
+BluetoothSocket socket =
+device.createInsecureRfcommSocketToServiceRecord(mUUID);
+
+它有什么区别？
+
+普通：
+
+RFCOMM
+
+↓
+
+Authentication
+
+↓
+
+Encryption
+
+↓
+
+Bond
+
+Insecure：
+
+RFCOMM
+
+↓
+
+No Authentication
+
+↓
+
+No Encryption
+
+↓
+
+部分设备可直接连接
+
+
+是否一定没有弹窗？
+
+不能保证。
+
+取决于：
+
+ESP32 是否接受 Insecure RFCOMM。
+
+如果 ESP32：
+
+BluetoothSerial SerialBT;
+
+默认配置通常仍要求配对。
+
+也就是说：
+
+Android：
+
+createInsecureRfcommSocket...
+
+ESP32：
+
+Require Authentication
+
+仍然：
+
+Pairing Dialog
+
+
+方案三：ESP32 修改 GAP 安全配置
+
+如果你使用的是：
+
+ESP-IDF：
+
+可以修改：
+
+esp_bt_gap_set_security_param(...)
+
+例如：
+
+ESP_BT_SP_IOCAP_MODE
+
+ESP_BT_PIN_TYPE_FIXED
+
+Authentication Requirement
+
+或者：
+
+关闭：
+
+SSP
+
+Authentication
+
+Encryption
+
+但是：
+
+即使 ESP32 不要求认证，
+
+Android Classic Bluetooth 的行为仍可能要求 Bond。
+
+因此：
+
+成功率有限。
+
+
+真正能彻底解决的方法
+
+如果你的通信内容只有：
+
+220
+180
+260
+0
+
+这种几十字节的数据。
+
+那么：
+
+Bluetooth Classic：
+
+SPP
+
+完全没有必要。
+
+改成：
+
+BLE UART。
+
+例如：
+
+Nordic UART Service（NUS）
+
+或者：
+
+自定义：
+
+Service
+
+↓
+
+Characteristic
+
+↓
+
+WriteWithoutResponse
+
+Android：
+
+connectGatt()
+
+↓
+
+discoverServices()
+
+↓
+
+writeCharacteristic()
+
+整个过程：
+
+APP
+
+↓
+
+connectGatt
+
+↓
+
+Connected
+
+↓
+
+Write
+
+没有：
+
+Pairing Dialog
+
+前提是 Characteristic 不要求 Encryption。
+
+
+我还发现插件里有几个值得修正的问题
+
+虽然与你的弹窗无关，但建议修改：
+
+ReadDatathread 只能启动一次
+
+private static final Thread ReadDatathread = new Thread(ReadData);
+
+然后：
+
+ReadDatathread.start();
+
+Thread 在 Java 中只能 start() 一次。
+
+第一次断开：
+
+interrupt();
+
+以后：
+
+start();
+
+会抛：
+
+IllegalThreadStateException
+
+应该每次连接重新创建 Thread。
+
+
+没有判断是否已经连接
+
+StartConnection() 可以被重复调用。
+
+建议：
+
+if (skt != null && skt.isConnected()) {
+    return;
+}
+
+
+outputStream.write() 后未 flush()
+
+虽然 RFCOMM 通常能正常发送，但为了降低缓冲延迟，可在协议允许时增加：
+
+outputStream.flush();
+
+
+最终结论
+
+基于你提供的完整代码，可以确定：
+
+使用的是 Bluetooth Classic RFCOMM/SPP，而非 BLE。
+配对弹窗是 BluetoothSocket.connect() 在设备未配对时由 Android Framework 自动触发的，不是 Unity 或插件代码主动弹出的。
+普通应用无法禁止或隐藏该系统配对弹窗。
+如果保持 SPP 架构，可尝试 createInsecureRfcommSocketToServiceRecord() 配合 ESP32 调整安全策略，但是否能避免配对取决于双方的安全配置，不能保证成功。
+若希望从架构上彻底避免首次配对弹窗，最可靠的方案是将通信改为 BLE GATT（且特征不要求加密），而不是继续使用经典蓝牙 SPP。
+
+
+you asked
+
+message time: 2026-07-22 14:28:42
+
+如何将通信改为LBE GATT
+
+
+chatgpt response
+
+如果你的通信内容只是：
+
+220
+180
+260
+0
+
+这种几十字节的控制命令，那么改成 BLE GATT 是非常合适的。你的整体架构（Unity → Java 插件 → ESP32）基本不用变，只需要替换底层蓝牙实现。
+
+下面按 ESP32、Android 插件、Unity 三部分说明。
+
+
+一、总体架构变化
+
+目前：
+
+Unity
+    │
+BluetoothConnector.java
+    │
+BluetoothSocket(RFCOMM)
+    │
+ESP32 BluetoothSerial
+
+改成：
+
+Unity
+    │
+BluetoothConnector.java
+    │
+BluetoothGatt
+    │
+ESP32 BLE Server
+
+Unity 层几乎不用改：
+
+BluetoothConnector.CallStatic("StartConnection", mac);
+
+BluetoothConnector.CallStatic("WriteData", speed.ToString());
+
+Java 插件内部改为 GATT 即可。
+
+
+二、ESP32 修改
+
+如果现在是：
+
+#include <BluetoothSerial.h>
+
+BluetoothSerial SerialBT;
+
+void setup()
+{
+    SerialBT.begin("Horse");
+}
+
+这属于 Classic Bluetooth。
+
+需要改成 BLE。
+
+ESP32 官方提供：
+
+ESP-IDF：
+
+esp_gatts
+
+Arduino：
+
+BLEDevice
+
+例如：
+
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+创建一个 Service：
+
+Horse Service
+
+UUID
+
+12345678-1234-5678-1234-56789abcdef0
+
+里面放一个 Characteristic：
+
+Speed Characteristic
+
+UUID
+
+87654321-4321-6789-4321-fedcba987654
+
+属性：
+
+PROPERTY_WRITE
+PROPERTY_WRITE_NR
+
+不要：
+
+PROPERTY_READ_ENCRYPTED
+PROPERTY_AUTHENTICATED
+
+也不要开启：
+
+BLE Security
+
+
+收到数据：
+
+class SpeedCallback : public BLECharacteristicCallbacks
+{
+    void onWrite(BLECharacteristic *pCharacteristic)
+    {
+        std::string value = pCharacteristic->getValue();
+
+        // value = "220"
+
+        int speed = atoi(value.c_str());
+
+        motor.setSpeed(speed);
+    }
+};
+
+整个 ESP32 就完成了。
+
+
+三、Java 插件修改
+
+删除：
+
+BluetoothSocket skt;
+
+InputStream
+
+OutputStream
+
+改成：
+
+BluetoothGatt gatt;
+
+BluetoothGattCharacteristic speedCharacteristic;
+
+连接：
+
+以前：
+
+BluetoothSocket socket =
+device.createRfcommSocketToServiceRecord(uuid);
+
+socket.connect();
+
+改成：
+
+BluetoothDevice device =
+adapter.getRemoteDevice(mac);
+
+device.connectGatt(
+    context,
+    false,
+    gattCallback
+);
+
+
+连接成功：
+
+BluetoothGattCallback callback =
+new BluetoothGattCallback()
+{
+    @Override
+    public void onConnectionStateChange(...)
+    {
+        gatt.discoverServices();
+    }
+};
+
+
+发现 Service：
+
+@Override
+public void onServicesDiscovered(...)
+{
+    BluetoothGattService service =
+        gatt.getService(HORSE_SERVICE_UUID);
+
+    speedCharacteristic =
+        service.getCharacteristic(SPEED_UUID);
+}
+
+
+发送数据：
+
+以前：
+
+outputStream.write(speed.getBytes());
+
+改成：
+
+speedCharacteristic.setValue(speed);
+
+gatt.writeCharacteristic(speedCharacteristic);
+
+Android 13 推荐使用新版 API：
+
+gatt.writeCharacteristic(
+    characteristic,
+    speed.getBytes(),
+    BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+);
+
+
+四、扫描
+
+以前：
+
+startDiscovery();
+
+改成：
+
+BluetoothLeScanner scanner =
+adapter.getBluetoothLeScanner();
+
+扫描：
+
+scanner.startScan(scanCallback);
+
+收到：
+
+ScanResult
+
+↓
+
+Device
+
+↓
+
+MAC
+
+Unity 那边完全一样：
+
+MAC+NAME
+
+即可。
+
+
+五、Unity 几乎不用改
+
+你的：
+
+BluetoothConnector.CallStatic(
+    "StartConnection",
+    mac);
+
+仍然可以保留。
+
+只是 Java 里面：
+
+以前：
+
+BluetoothSocket.connect()
+
+变成：
+
+connectGatt()
+
+
+发送：
+
+BluetoothConnector.CallStatic(
+    "WriteData",
+    speed.ToString());
+
+Java：
+
+以前：
+
+OutputStream.write()
+
+改：
+
+writeCharacteristic()
+
+Unity 不需要知道。
+
+
+六、为什么不会弹框？
+
+因为：
+
+Characteristic：
+
+WRITE
+
+权限：
+
+No Security
+
+流程：
+
+connectGatt()
+
+↓
+
+Connected
+
+↓
+
+Discover Services
+
+↓
+
+Write Characteristic
+
+↓
+
+ESP32 收到数据
+
+Android 不需要建立 Bond。
+
+
+七、你的业务非常适合 BLE
+
+你的通信内容：
+
+220
+180
+260
+0
+
+大约：
+
+3~4 Byte
+
+即使以后扩展：
+
+220,180,15
+
+也不过：
+
+10 Byte
+
+BLE 每次可传输的数据量（MTU 默认约 20 字节有效载荷，协商后通常可提升到更大，如 185 或 247 字节）对于这种控制指令来说绰绰有余。
+
+对比项 当前 SPP BLE GATT
+首次连接 系统可能要求配对 可无需配对（取决于特征权限）
+连接速度 较快 较快（通常几十到几百毫秒完成 GATT 建立）
+数据量 很大 足够你的控制命令
+实现复杂度 简单 略高，需要 Service/Characteristic
+Pico/Android 支持 完整 完整
+适合你的场景 可以 更推荐
+
+建议
+
+从你的项目来看，不建议仅修改 Java 插件，而应同步调整 ESP32 固件。
+
+最佳迁移路线是：
+
+ESP32：将 BluetoothSerial 改为 BLE GATT Server，定义一个用于接收速度值的 Write Characteristic，不启用加密或配对。
+Android 插件：将 BluetoothSocket/RFCOMM 改为 BluetoothGatt，实现扫描、连接、服务发现和 Characteristic 写入。
+Unity：保持 StartConnection(mac) 和 WriteData(speed) 接口不变，仅替换 AAR，实现对 Unity 层透明。
+
+这样 Unity 业务逻辑（选马、路径控制、速度发送等）基本无需修改，而可以消除当前由于经典蓝牙 SPP 带来的首次配对弹窗。
+
+
+you asked
+
+message time: 2026-07-22 14:31:49
+
+ESP这边的代码不是我们自己写的。如果要咨询供应商，应该如何问
+
+
+chatgpt response
+
+建议不要直接问：
+
+能不能改成 BLE？
+
+
+
+这个问题太宽泛，供应商很可能回复：
+
+可以，需要重新开发。
+
+
+
+而你真正需要确认的是他们现有固件能力和改造成本。
+
+建议按下面几个问题询问。
+
+
+第一组：确认当前协议（最重要）
+
+我们目前 Android 端分析发现，设备是通过 Classic Bluetooth SPP（RFCOMM，UUID：00001101-0000-1000-8000-00805F9B34FB）通信的。
+
+请确认一下，目前 ESP32 固件是否使用的是 Bluetooth Classic SPP（BluetoothSerial），还是 BLE GATT？
+
+
+
+这一步主要确认你们的分析是否正确。
+
+
+第二组：确认是否已有 BLE 固件
+
+这是最关键的问题。
+
+请问目前这套设备是否已经有 BLE GATT 版本的固件？
+
+如果有，是否可以提供 BLE 固件以及对应的 GATT Service UUID 和 Characteristic UUID？
+
+
+
+很多供应商其实已经有 BLE 版本，只是项目当初采用了 SPP。
+
+
+第三组：如果没有 BLE，是否可以改
+
+可以直接问：
+
+如果目前只有 Classic Bluetooth SPP，请问是否可以修改为 BLE GATT 通信？
+
+我们 Android 端可以配合修改，不要求保持现有 SPP 协议。
+
+
+
+这样供应商就知道不是要求兼容旧协议。
+
+
+第四组：确认 BLE 通信方式
+
+如果他们回答可以改 BLE。
+
+继续问：
+
+BLE 是否支持以下通信方式：
+
+一个 Write Characteristic 接收速度数据；
+数据内容保持与现在一致，例如 "220"、"180"、"0"；
+不启用 Pairing/Bonding；
+Characteristic 使用普通 WRITE 或 WRITE WITHOUT RESPONSE 即可。
+
+
+
+这里实际上是在告诉供应商：
+
+我们的需求非常简单。
+
+很多供应商一看到 BLE 就想到：
+
+Notify
+OTA
+加密
+配网
+
+其实你根本不需要。
+
+
+第五组：确认是否要求配对
+
+这是与你当前问题直接相关的一项。
+
+可以问：
+
+BLE 版本是否可以在不进行 Pairing/Bonding 的情况下直接连接并写入 Characteristic？
+
+
+
+如果他们回答：
+
+可以。
+
+
+
+那么 Android 就不会再出现系统配对弹窗（前提是 GATT 特征权限未要求加密）。
+
+
+第六组：确认 ESP32 SDK
+
+可以顺便问：
+
+请问目前 ESP32 使用的是：
+
+ESP-IDF
+Arduino
+其他 SDK
+
+
+
+这个会影响后续技术沟通，但不是必须。
+
+
+我建议直接发给供应商的完整内容
+
+我们目前分析 Android 端蓝牙插件，发现当前通信方式是 Bluetooth Classic SPP（RFCOMM，UUID：00001101-0000-1000-8000-00805F9B34FB）。由于 Android/Pico 首次连接 SPP 设备时会弹出系统配对请求，我们希望评估改为 BLE GATT 通信的可行性。
+
+想确认以下几点：
+
+当前 ESP32 固件是否使用的是 Bluetooth Classic SPP（BluetoothSerial）？
+是否已有 BLE GATT 版本固件？如果有，是否可以提供对应版本及 Service UUID、Characteristic UUID。
+如果目前没有 BLE 版本，是否可以修改为 BLE GATT 通信？
+我们的通信需求非常简单，仅需要 Android 向设备发送速度值（如 "220"、"180"、"0"），BLE 是否可以提供一个 Write（或 Write Without Response）Characteristic 来接收这些数据？
+BLE 版本是否可以在无需 Pairing/Bonding 的情况下完成连接和数据写入？
+
+
+
+
+这几项基本能够把协议类型、是否已有方案、开发工作量、以及能否解决配对弹窗一次性确认清楚，也方便供应商直接评估是否需要修改固件。
+
+
+you asked
+
+message time: 2026-07-22 14:35:58
+
+我用BLE调试助手APP，是这么连接和操作vrgao001_BLE的
+
+
+chatgpt response
+
+这三张截图非常关键，它们说明了一件事情：
+
+这块 ESP32 实际上已经支持 BLE GATT。
+
+
+
+这推翻了我们之前根据 .aar 得出的一个假设。
+
+
+从截图可以确定什么？
+
+1. 能被 BLE 调试助手扫描到
+
+第一张图：
+
+vrgao001_BLE
+28:05:A5:29:06:B6
+BONDED
+
+说明：
+
+是 BLE Advertising
+不是 Classic Bluetooth Discovery
+
+
+2. 能看到 GATT Service
+
+第二张图：
+
+Generic Attribute (1801)
+
+Generic Access (1800)
+
+Unknown Service
+
+UUID:
+4fafc201-1fb5-459e-8fcc-c5c9c331914b
+
+这是标准 BLE GATT。
+
+下面还有：
+
+Characteristic
+
+beb5483e-36e1-4688-b7f5-ea07361b26a8
+
+READ
+WRITE
+NOTIFY
+
+这是 ESP32 官方 BLE 示例使用的 UUID。
+
+我一眼就认出来了：
+
+Service:
+
+4fafc201-1fb5-459e-8fcc-c5c9c331914b
+
+Characteristic:
+
+beb5483e-36e1-4688-b7f5-ea07361b26a8
+
+这是 Espressif 官方 BLE 示例代码的默认 UUID。
+
+也就是说：
+
+供应商极有可能就是基于 ESP32 官方 BLE Demo 开发的。
+
+
+3. 调试助手直接可以写数据
+
+第三张图：
+
+点击：
+
+WRITE
+
+即可输入：
+
+220
+
+发送。
+
+这说明：
+
+BLE 写 Characteristic 已经实现了。
+
+
+那为什么你的 Unity 工程还是 SPP？
+
+这里就出现一个矛盾：
+
+你的 Java 插件：
+
+BluetoothSocket
+
+只能连接：
+
+Classic Bluetooth。
+
+但是：
+
+设备：
+
+vrgao001_BLE
+
+明显是：
+
+BLE。
+
+两者理论上不能互通。
+
+
+所以我认为目前存在两种可能。
+
+
+可能一（我认为概率最高）
+
+供应商后来已经升级了固件。
+
+以前：
+
+Classic SPP
+
+后来：
+
+BLE
+
+但是：
+
+Unity 项目还一直沿用：
+
+BluetoothSocket
+
+所以：
+
+你现在拿到的是：
+
+旧 Android 插件
+
+
+
+新 BLE 固件
+
+
+可能二
+
+ESP32 同时开启：
+
+Classic Bluetooth
+
++
+
+BLE
+
+ESP32 支持双模。
+
+例如：
+
+BluetoothSerial
+
++
+
+BLEDevice
+
+同时运行。
+
+那么：
+
+Unity：
+
+连接：
+
+SPP
+
+BLE 调试助手：
+
+连接：
+
+BLE
+
+两边都可以。
+
+
+我建议你现在先做一个验证
+
+不用问供应商。
+
+只要做一个实验。
+
+BLE 调试助手：
+
+连接：
+
+vrgao001_BLE
+
+写：
+
+220
+
+看看：
+
+马机会不会动。
+
+如果：
+
+220
+
+马机开始运行。
+
+那么：
+
+已经可以确定：
+
+BLE 已经是控制接口。
+
+
+
+Unity 根本不需要 SPP。
+
+
+如果：
+
+220
+
+没有任何反应。
+
+说明：
+
+BLE 只是：
+
+Demo
+
+真正控制还是：
+
+SPP
+
+
+如果 BLE 可以控制
+
+那么你们后续工作量非常小。
+
+Java 插件：
+
+把：
+
+BluetoothSocket
+
+全部删掉。
+
+改：
+
+BluetoothGatt
+
+连接：
+
+4faf...
+
+↓
+
+beb5...
+
+↓
+
+writeCharacteristic()
+
+Unity：
+
+WriteData(speed)
+
+接口完全不用改。
+
+
+我建议现在再做两个验证
+
+用 BLE 调试助手：
+
+①
+
+发送：
+
+220
+
+看看马有没有反应。
+
+
+②
+
+发送：
+
+0
+
+看看马会不会停。
+
+
+③（最重要）
+
+看看连接 BLE 的时候：
+
+有没有任何 Android 配对弹窗。
+
+从你的截图来看：
+
+CONNECT
+↓
+
+直接进入 Service
+
+整个过程没有看到系统配对请求。
+
+如果确实如此，那么基本可以确认：
+
+BLE 接口已经满足你们避免系统配对弹窗的目标。
+
+
+我现在反而建议不要急着联系供应商。
+
+因为从这三张截图来看，他们很可能已经把 BLE 功能做好了。当前更值得确认的是：
+
+BLE 是否就是实际控制马机的通信接口（发送 220、0 是否能控制设备）。
+当前 Unity 项目为什么还使用经典蓝牙 SPP 插件——是历史遗留代码，还是 BLE 与 SPP 分别承担不同功能。
+
+如果 BLE 已经能够完成控制，那么后续工作很可能只是**将 Unity 的 Android 插件从 BluetoothSocket 改为 BluetoothGatt**，而不需要供应商重新开发 ESP32 固件。
+
+
+you asked
+
+message time: 2026-07-22 14:41:15
+
+可以控制
+这个是供应商提供的SDK不匹配。现在如果要修改。如何修改
+
+
+chatgpt response
+
+这就非常明确了，而且这是一个非常好的结果。
+
+你已经验证了：
+
+✅ ESP32 已经支持 BLE GATT
+✅ BLE Characteristic 写入 "220" 可以控制马机
+✅ 不需要重新开发 ESP32 固件
+✅ 问题仅在于 Unity 使用了一个旧的 SPP SDK
+
+所以根本不需要供应商改 ESP32，只需要把 Android 插件从 SPP 改成 BLE。
+
+
+你的项目需要修改哪些地方？
+
+实际上只有 Android Plugin（AAR）。
+
+Unity C# 基本不用改。
+
+目前：
+
+Unity C#
+    │
+BluetoothConnector.java
+    │
+BluetoothSocket(RFCOMM)
+    │
+ESP32
+
+修改后：
+
+Unity C#
+    │
+BluetoothConnector.java
+    │
+BluetoothGatt
+    │
+ESP32 BLE
+
+
+第一步：删除 SPP
+
+目前的连接：
+
+BluetoothSocket skt;
+
+BluetoothDevice device =
+    adapter.getRemoteDevice(mac);
+
+skt =
+device.createRfcommSocketToServiceRecord(mUUID);
+
+skt.connect();
+
+整个这一套全部删除。
+
+包括：
+
+InputStream
+
+OutputStream
+
+BufferedReader
+
+Thread ReadData
+
+BLE 不需要这些。
+
+
+第二步：改成 BluetoothGatt
+
+增加：
+
+private BluetoothGatt bluetoothGatt;
+
+private BluetoothGattCharacteristic writeCharacteristic;
+
+连接：
+
+BluetoothDevice device =
+    adapter.getRemoteDevice(mac);
+
+bluetoothGatt =
+device.connectGatt(
+    context,
+    false,
+    gattCallback
+);
+
+
+第三步：实现 BluetoothGattCallback
+
+主要实现三个回调。
+
+① 连接成功
+
+@Override
+public void onConnectionStateChange(
+        BluetoothGatt gatt,
+        int status,
+        int newState) {
+
+    if(newState==BluetoothProfile.STATE_CONNECTED){
+
+        gatt.discoverServices();
+
+    }
+}
+
+
+② Service发现
+
+你的 UUID 已经知道：
+
+Service：
+
+4fafc201-1fb5-459e-8fcc-c5c9c331914b
+
+Characteristic：
+
+beb5483e-36e1-4688-b7f5-ea07361b26a8
+
+所以：
+
+BluetoothGattService service =
+gatt.getService(
+UUID.fromString(
+"4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+));
+
+writeCharacteristic =
+service.getCharacteristic(
+UUID.fromString(
+"beb5483e-36e1-4688-b7f5-ea07361b26a8"
+));
+
+然后：
+
+UnityPlayer.UnitySendMessage(
+"BluetoothManager",
+"ConnectionStatus",
+"connected");
+
+即可。
+
+
+第四步：修改 WriteData()
+
+以前：
+
+outputStream.write(speed.getBytes());
+
+改成：
+
+Android 13 以下：
+
+writeCharacteristic.setValue(speed);
+
+bluetoothGatt.writeCharacteristic(
+writeCharacteristic);
+
+Android 13 推荐：
+
+bluetoothGatt.writeCharacteristic(
+    writeCharacteristic,
+    speed.getBytes(StandardCharsets.UTF_8),
+    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+);
+
+如果 ESP32 支持 WRITE WITHOUT RESPONSE，可以把写入类型改成：
+
+writeCharacteristic.setWriteType(
+BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+
+这样延迟通常更低，也更符合控制类指令场景。
+
+
+第五步：断开连接
+
+以前：
+
+socket.close();
+
+改：
+
+bluetoothGatt.disconnect();
+
+bluetoothGatt.close();
+
+
+Unity C# 基本不用改
+
+你现在：
+
+BluetoothConnector.CallStatic(
+    "StartConnection",
+    mac);
+
+继续保留。
+
+
+发送：
+
+BluetoothConnector.CallStatic(
+    "WriteData",
+    speed.ToString());
+
+继续保留。
+
+所以：
+
+BluetoothManager.cs 基本一行不用改。
+
+
+甚至扫描都可以省掉
+
+你的 Unity：
+
+StartConnection(mac);
+
+因为：
+
+已经知道：
+
+28:05:A5:29:06:B6
+
+BLE：
+
+adapter.getRemoteDevice(mac)
+
+也是支持的。
+
+所以：
+
+可以直接：
+
+MAC
+
+↓
+
+connectGatt()
+
+完全不用：
+
+Scan
+
+↓
+
+Find Device
+
+这和现在 SPP 的流程一致。
+
+
+需要新增哪些权限？
+
+你已经申请了：
+
+BLUETOOTH_SCAN
+
+BLUETOOTH_CONNECT
+
+所以：
+
+不用增加任何权限。
+
+
+整个改造工作量
+
+实际上没有想象的大。
+
+模块 是否修改
+Unity C# 基本不用
+AndroidManifest 不用
+Android 权限 不用
+BluetoothManager.cs 基本不用
+BluetoothConnector.java 需要重写
+ESP32 不用
+
+
+我建议的实现方式
+
+不要在原来的 BluetoothConnector.java 上继续修改。
+
+原因是：
+
+现在这份代码约 300 行，其中约 70% 都是围绕 SPP（BluetoothSocket、InputStream、OutputStream、读取线程等）设计的。BLE 的通信模型与 SPP 完全不同，继续在原文件上修改会留下大量无用代码，也容易引入状态管理问题。
+
+更合理的做法是：
+
+保持 Unity 对外接口不变：StartConnection(String mac)
+WriteData(String speed)
+StopConnection()
+
+
+**重新实现一个基于 BluetoothGatt 的 BluetoothConnector.java**。
+编译成新的 unity3dbluetoothplugin-release.aar，直接替换 Unity 工程中的旧 AAR。
+
+这样 Unity 上层逻辑完全不需要改动，只替换底层实现即可。
+
+
+我还建议把 Android 端一起升级到当前推荐的 BLE API（兼容 Android 8～15），避免继续使用已废弃的 BluetoothGattCharacteristic.setValue() 等旧接口。 这样得到的是一套可以长期维护的 BLE 插件，而不是在旧 SPP 插件基础上的局部修补。
+
+
+you asked
+
+message time: 2026-07-22 14:48:34
+
+输出需求和解决方案作为plan，我要去让其他ai实现
+
+
+chatgpt response
+
+下面是一份可以直接交给其他 AI 或开发人员实现的 实施方案（Plan）。
+
+
+Plan：将 Unity Android 蓝牙插件从 Bluetooth SPP 改为 BLE GATT
+
+一、项目背景
+
+当前 Unity 项目使用 Android Java 插件 unity3dbluetoothplugin-release.aar 与 ESP32 通信。
+
+目前插件采用 Bluetooth Classic SPP（RFCOMM）：
+
+Unity
+    ↓
+BluetoothConnector.java
+    ↓
+BluetoothSocket (RFCOMM)
+    ↓
+ESP32
+
+连接代码为：
+
+BluetoothSocket socket =
+device.createRfcommSocketToServiceRecord(
+UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+);
+
+socket.connect();
+
+由于 Android Classic Bluetooth 在首次连接未配对设备时，会弹出系统 Pairing Dialog，影响 VR 体验。
+
+
+二、现状分析
+
+经过验证：
+
+ESP32 已支持 BLE
+
+使用 BLE 调试助手验证：
+
+设备名称：
+
+vrgao001_BLE
+
+MAC：
+
+28:05:A5:29:06:B6
+
+BLE Service：
+
+4fafc201-1fb5-459e-8fcc-c5c9c331914b
+
+Characteristic：
+
+beb5483e-36e1-4688-b7f5-ea07361b26a8
+
+Properties：
+
+READ
+WRITE
+NOTIFY
+
+使用 BLE 调试助手：
+
+写入：
+
+220
+
+设备立即动作。
+
+说明：
+
+ESP32 已具备完整 BLE GATT 控制能力。
+
+
+
+因此：
+
+无需修改 ESP32 固件。
+
+
+三、目标
+
+替换 Android 蓝牙插件：
+
+由：
+
+BluetoothSocket (SPP)
+
+改为：
+
+BluetoothGatt (BLE)
+
+要求：
+
+Unity 上层代码尽量保持不变。
+
+
+四、Unity 层要求
+
+下面接口必须保持一致。
+
+目前 Unity 调用：
+
+BluetoothConnector.CallStatic(
+    "StartConnection",
+    mac);
+
+发送：
+
+BluetoothConnector.CallStatic(
+    "WriteData",
+    speed.ToString());
+
+断开：
+
+BluetoothConnector.CallStatic(
+    "StopConnection");
+
+要求：
+
+Java Plugin 保持完全相同接口。
+
+即：
+
+StartConnection(String mac)
+
+WriteData(String speed)
+
+StopConnection()
+
+Unity C# 无需修改。
+
+
+五、BLE 通信参数
+
+Service UUID
+
+4fafc201-1fb5-459e-8fcc-c5c9c331914b
+
+Characteristic UUID
+
+beb5483e-36e1-4688-b7f5-ea07361b26a8
+
+Characteristic Properties
+
+READ
+
+WRITE
+
+NOTIFY
+
+实际只需要：
+
+WRITE
+
+
+六、StartConnection()
+
+修改实现：
+
+由：
+
+BluetoothSocket.connect()
+
+改：
+
+BluetoothDevice.connectGatt()
+
+流程：
+
+StartConnection(mac)
+
+↓
+
+BluetoothAdapter.getRemoteDevice(mac)
+
+↓
+
+connectGatt()
+
+↓
+
+onConnectionStateChange()
+
+↓
+
+discoverServices()
+
+↓
+
+onServicesDiscovered()
+
+↓
+
+保存 Characteristic
+
+↓
+
+Unity 回调：
+
+ConnectionStatus("connected")
+
+要求：
+
+仍保持：
+
+ConnectionStatus("connecting")
+
+ConnectionStatus("connected")
+
+ConnectionStatus("disconnected")
+
+与旧插件一致。
+
+
+七、WriteData()
+
+当前：
+
+OutputStream.write(speed.getBytes())
+
+改：
+
+向 Characteristic 写入 UTF-8 字符串。
+
+例如：
+
+220
+
+发送：
+
+0x32
+
+0x32
+
+0x30
+
+不要添加：
+
+\r
+
+\n
+
+因为 BLE 调试助手直接发送字符串即可控制设备。
+
+推荐：
+
+Android 13+
+
+BluetoothGatt.writeCharacteristic(
+characteristic,
+speed.getBytes(StandardCharsets.UTF_8),
+WRITE_TYPE_DEFAULT
+)
+
+如果设备支持：
+
+WRITE WITHOUT RESPONSE
+
+则：
+
+WRITE_TYPE_NO_RESPONSE
+
+优先。
+
+
+八、StopConnection()
+
+当前：
+
+socket.close()
+
+改：
+
+bluetoothGatt.disconnect()
+
+bluetoothGatt.close()
+
+释放资源。
+
+
+九、删除内容
+
+全部删除：
+
+BluetoothSocket
+
+InputStream
+
+OutputStream
+
+BufferedReader
+
+Read Thread
+
+SPP UUID
+
+00001101-0000-1000-8000-00805F9B34FB
+
+这些全部属于 Classic Bluetooth。
+
+BLE 不需要。
+
+
+十、扫描
+
+无需实现 BLE Scan。
+
+原因：
+
+Unity 已知道：
+
+MAC
+
+直接：
+
+getRemoteDevice(mac)
+
+↓
+
+connectGatt()
+
+即可。
+
+因此：
+
+StartScanDevices()
+
+StopScanDevices()
+
+GetPairedDevices()
+
+可以：
+
+保持接口；
+
+内部空实现；
+
+或删除（如果 Unity 未调用）。
+
+
+十一、Android 权限
+
+保持：
+
+BLUETOOTH
+
+BLUETOOTH_ADMIN
+
+BLUETOOTH_SCAN
+
+BLUETOOTH_CONNECT
+
+无需新增权限。
+
+
+十二、Unity 回调保持兼容
+
+仍使用：
+
+UnityPlayer.UnitySendMessage()
+
+回调对象：
+
+BluetoothManager
+
+保持：
+
+ConnectionStatus()
+
+ReadLog()
+
+即可。
+
+无需修改 Unity。
+
+
+十三、兼容要求
+
+支持：
+
+Android 8+
+
+Android 9
+
+Android 10
+
+Android 11
+
+Android 12
+
+Android 13
+
+Android 14
+
+Android 15
+
+优先使用 Android 当前推荐 BLE API。
+
+避免继续使用已经 Deprecated 的旧写法。
+
+
+十四、最终交付物
+
+需要提供：
+
+BluetoothConnector.java
+
+重新实现。
+
+以及：
+
+unity3dbluetoothplugin-release.aar
+
+重新编译。
+
+
+十五、目标效果
+
+最终流程：
+
+Unity
+
+↓
+
+StartConnection(mac)
+
+↓
+
+BluetoothGatt.connect()
+
+↓
+
+Connected
+
+↓
+
+WriteData("220")
+
+↓
+
+ESP32 收到：
+
+220
+
+↓
+
+马机动作
+
+整个过程中：
+
+不使用 Bluetooth Classic（SPP）
+不使用 RFCOMM
+不使用 BluetoothSocket
+不触发 Android 系统蓝牙配对弹窗
+Unity 上层接口保持不变，仅替换 Android AAR 实现。

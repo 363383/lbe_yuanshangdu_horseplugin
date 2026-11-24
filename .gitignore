@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Android build intermediates (compile-time only, keep output/)
+app/build/
+library/build/
+
+# Gradle cache
+.gradle/
+
+# IDE
+.idea/
+*.iml
+*.iws
+
+# Local configuration
+.claude/
+
+# Others
+local.properties
+*.log
+*.tmp
